@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Production build outputs
+dist/
+frontend/dist/
+build/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Environment variables
+.env
+frontend/.env
+*.env.local
+
+# IDE & System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# PlatformIO build
+.pio/
+.pioenvs/
