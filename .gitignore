@@ -27,3 +27,6 @@ Thumbs.db
 # PlatformIO build
 .pio/
 .pioenvs/
+
+.vercel
+.env*
