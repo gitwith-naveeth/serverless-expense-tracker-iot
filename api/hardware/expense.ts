@@ -31,6 +31,13 @@ export async function handleHardwareExpense(payload: HardwareExpensePayload, aut
     };
   }
 
+  if (!token) {
+    return {
+      status: 401,
+      body: { error: 'Device authentication is required.' }
+    };
+  }
+
   // Idempotency check to prevent duplicate hardware button bounces
   if (requestId) {
     if (processedRequestIds.has(requestId)) {
@@ -60,14 +67,12 @@ export async function handleHardwareExpense(payload: HardwareExpensePayload, aut
     }
 
     // Authenticate device secret
-    if (token) {
-      const isValid = verifySecretHash(token, device.device_secret_hash);
-      if (!isValid) {
-        return {
-          status: 401,
-          body: { error: 'Device authentication failed. Invalid device secret token.' }
-        };
-      }
+    const isValid = verifySecretHash(token, device.device_secret_hash);
+    if (!isValid) {
+      return {
+        status: 401,
+        body: { error: 'Device authentication failed. Invalid device secret token.' }
+      };
     }
 
     // Determine amount
@@ -134,6 +139,13 @@ export async function handleHardwareExpense(payload: HardwareExpensePayload, aut
     return {
       status: 404,
       body: { error: `Device '${deviceId}' not found. Please register the device first.` }
+    };
+  }
+
+  if (!verifySecretHash(token, mockDev.device_secret_hash)) {
+    return {
+      status: 401,
+      body: { error: 'Device authentication failed. Invalid device secret token.' }
     };
   }
 

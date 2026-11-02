@@ -26,7 +26,7 @@ const char* WIFI_SSID     = "YOUR_WIFI_NAME";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 const char* API_ENDPOINT  = "https://your-domain.vercel.app/api/hardware/expense";
 const char* DEVICE_ID     = "${selectedDeviceId}";
-const char* DEVICE_TOKEN  = "esp32_secret_token_12345"; // Keep secret!
+const char* DEVICE_TOKEN  = "YOUR_DEVICE_TOKEN"; // Replace with the token generated during pairing.
 
 // Target Default Amounts Configured on Server:
 // Essential (Btn 1): ${currency}${essentialAmt}

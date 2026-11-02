@@ -92,7 +92,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (isConfigured) {
       const { error } = await supabase.auth.signUp({
         email,
-        password: 'Password123!',
+        password: `${crypto.randomUUID()}Aa1!`,
         options: { data: { full_name: name } }
       });
       setLoading(false);

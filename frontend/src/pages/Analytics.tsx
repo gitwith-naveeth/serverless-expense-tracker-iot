@@ -1,223 +1,214 @@
-import React from 'react';
-import { useRealtime } from '../context/RealtimeContext';
-import { useAuth } from '../context/AuthContext';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  Legend,
+  Area,
   AreaChart,
-  Area
+  Bar,
+  BarChart,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
 } from 'recharts';
-import { PieChart as PieIcon, Cpu, TrendingUp, Zap, Coffee, BarChart2 } from 'lucide-react';
+import { supabase, isConfigured } from '../services/supabaseClient';
+import { useAuth } from '../context/AuthContext';
+
+interface AnalyticsResponse {
+  summary: {
+    totalExpenses: number;
+    totalIncome: number;
+    netSavings: number;
+    expenseCount: number;
+    averageDailySpending: number;
+    incomeToExpenseRatio: number | null;
+    savingsPercentage: number | null;
+    essentialExpenses: number;
+    nonEssentialExpenses: number;
+    essentialPercentage: number;
+    nonEssentialPercentage: number;
+  };
+  daily: { date: string; amount: number; transactionCount: number }[];
+  categories: { name: string; amount: number; transactionCount: number; percentage: number }[];
+  monthly: { month: string; expenses: number; income: number; savings: number }[];
+  sources: Record<string, { transactionCount: number; amount: number }>;
+  budget: {
+    totalAllocated: number;
+    totalSpent: number;
+    remaining: number;
+    utilizationPercentage: number;
+  };
+  hardware: {
+    totalExpenses: number;
+    transactionCount: number;
+    essentialExpenses: number;
+    nonEssentialExpenses: number;
+    devices: { deviceId: string; deviceName: string; status: string; transactionCount: number; amount: number }[];
+  };
+}
+
+const formatDate = (date: Date) => date.toISOString().slice(0, 10);
 
 export const Analytics: React.FC = () => {
-  const { transactions, devices } = useRealtime();
   const { user } = useAuth();
-
   const currency = user?.currency === 'USD' ? '$' : user?.currency === 'EUR' ? '€' : '₹';
+  const today = useMemo(() => new Date(), []);
+  const [startDate, setStartDate] = useState(() => {
+    const date = new Date(today);
+    date.setUTCDate(date.getUTCDate() - 30);
+    return formatDate(date);
+  });
+  const [endDate, setEndDate] = useState(() => formatDate(today));
+  const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // 1. Essential vs Non-Essential Aggregation
-  const essentialSpent = transactions
-    .filter(t => t.transaction_type === 'expense' && t.expense_classification === 'essential')
-    .reduce((sum, t) => sum + Number(t.amount), 0);
+  useEffect(() => {
+    let active = true;
+    const loadAnalytics = async () => {
+      setLoading(true);
+      setError(null);
+      if (!isConfigured) {
+        setError('Connect Supabase to load cloud analytics.');
+        setLoading(false);
+        return;
+      }
 
-  const nonEssentialSpent = transactions
-    .filter(t => t.transaction_type === 'expense' && t.expense_classification === 'non-essential')
-    .reduce((sum, t) => sum + Number(t.amount), 0);
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        setError('Sign in to load your analytics.');
+        setLoading(false);
+        return;
+      }
 
-  const classificationData = [
-    { name: 'Essential Expenses', value: essentialSpent, color: '#10b981' },
-    { name: 'Non-Essential Expenses', value: nonEssentialSpent, color: '#f59e0b' }
-  ];
+      const response = await fetch(`/api/analytics/overview?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(`${endDate}T23:59:59.999Z`)}`, {
+        headers: { Authorization: `Bearer ${sessionData.session.access_token}` }
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        if (active) setError(body.error || 'Unable to load cloud analytics.');
+      } else if (active) {
+        setAnalytics(body as AnalyticsResponse);
+      }
+      if (active) setLoading(false);
+    };
 
-  // 2. Category-wise Spending
-  const categoryMap: { [key: string]: number } = {};
-  transactions
-    .filter(t => t.transaction_type === 'expense')
-    .forEach(t => {
-      categoryMap[t.category] = (categoryMap[t.category] || 0) + Number(t.amount);
+    loadAnalytics().catch(() => {
+      if (active) {
+        setError('Unable to load cloud analytics. Please try again.');
+        setLoading(false);
+      }
     });
+    return () => { active = false; };
+  }, [startDate, endDate]);
 
-  const categoryData = Object.keys(categoryMap).map(cat => ({
-    name: cat,
-    amount: categoryMap[cat]
-  }));
-
-  // 3. Hardware vs Web Contribution Stats
-  const hardwareTransactions = transactions.filter(t => t.source === 'hardware');
-  const webTransactions = transactions.filter(t => t.source === 'web');
-  const hardwareEssentialCount = hardwareTransactions.filter(t => t.expense_classification === 'essential').length;
-  const hardwareNonEssentialCount = hardwareTransactions.filter(t => t.expense_classification === 'non-essential').length;
-
-  const sourceComparisonData = [
-    { name: 'ESP32 Hardware', count: hardwareTransactions.length },
-    { name: 'Web App Manual', count: webTransactions.length }
-  ];
-
-  // 4. Income-to-Expense Ratio Calculation
-  const totalIncome = transactions
-    .filter(t => t.transaction_type === 'income')
-    .reduce((sum, t) => sum + Number(t.amount), 0);
-
-  const totalExpense = essentialSpent + nonEssentialSpent;
-  const incomeToExpenseRatio = totalExpense > 0 
-    ? (totalIncome / totalExpense).toFixed(2)
-    : 'N/A';
-
-  // 5. Sample Trend Data
-  const trendData = [
-    { month: 'May', essential: 11000, nonEssential: 4500, income: 60000 },
-    { month: 'Jun', essential: 13500, nonEssential: 6200, income: 62000 },
-    { month: 'Jul', essential: 12000, nonEssential: 5800, income: 60000 },
-    { month: 'Aug', essential: 14200, nonEssential: 7100, income: 65000 },
-    { month: 'Sep (Current)', essential: essentialSpent || 12500, nonEssential: nonEssentialSpent || 5400, income: totalIncome || 65000 }
-  ];
-
-  const COLORS = ['#10b981', '#f59e0b', '#6366f1', '#06b6d4', '#ec4899', '#8b5cf6'];
+  const money = (value: number) => `${currency}${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  const classificationData = analytics ? [
+    { name: 'Essential Expenses', value: analytics.summary.essentialExpenses, color: '#10b981' },
+    { name: 'Non-Essential Expenses', value: analytics.summary.nonEssentialExpenses, color: '#f59e0b' }
+  ] : [];
+  const sourceData = analytics ? Object.entries(analytics.sources).map(([name, value]) => ({
+    name: name === 'hardware' ? 'ESP32 Hardware' : 'Web App',
+    count: value.transactionCount
+  })) : [];
 
   return (
     <div>
       <div className="page-header">
         <div>
           <h1 className="page-title">Cloud Analytics & Financial Reports</h1>
-          <p className="page-subtitle">
-            Serverless cloud analytics breaking down essential needs, non-essential wants, and IoT hardware inputs.
-          </p>
+          <p className="page-subtitle">Aggregated securely in Supabase for the selected date range.</p>
+        </div>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <label>From <input type="date" value={startDate} onChange={event => setStartDate(event.target.value)} /></label>
+          <label>To <input type="date" value={endDate} onChange={event => setEndDate(event.target.value)} /></label>
         </div>
       </div>
 
-      {/* Analytics Highlights Banner */}
-      <div className="grid-3" style={{ marginBottom: '1.5rem' }}>
-        <div className="glass-card">
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>
-            Income-to-Expense Ratio
+      {loading && <div className="glass-card">Loading cloud analytics...</div>}
+      {error && <div className="glass-card" style={{ color: '#fca5a5' }}>{error}</div>}
+      {!loading && !error && analytics && (
+        <>
+          <div className="grid-3" style={{ marginBottom: '1.5rem' }}>
+            <div className="glass-card"><div className="metric-label">Total Expenses</div><div className="metric-value">{money(analytics.summary.totalExpenses)}</div><div className="metric-caption">{analytics.summary.expenseCount} transactions</div></div>
+            <div className="glass-card"><div className="metric-label">Net Savings</div><div className="metric-value">{money(analytics.summary.netSavings)}</div><div className="metric-caption">Income {money(analytics.summary.totalIncome)}</div></div>
+            <div className="glass-card"><div className="metric-label">Income / Expense</div><div className="metric-value">{analytics.summary.incomeToExpenseRatio === null ? 'N/A' : `${analytics.summary.incomeToExpenseRatio.toFixed(2)} : 1`}</div><div className="metric-caption">Average daily spend {money(analytics.summary.averageDailySpending)}</div></div>
           </div>
-          <div style={{ fontSize: '2rem', fontWeight: 800, color: '#06b6d4', marginTop: '0.25rem' }}>
-            {incomeToExpenseRatio} : 1
-          </div>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: '0.35rem' }}>
-            For every {currency}1 spent, you earn {currency}{incomeToExpenseRatio}
-          </div>
-        </div>
 
-        <div className="glass-card">
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>
-            Essential vs Non-Essential Breakdown
+          <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
+            <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
+              <h3>Essential vs Non-Essential Spending</h3>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={classificationData} dataKey="value" nameKey="name" innerRadius={60} outerRadius={100} paddingAngle={5}>
+                      {classificationData.map(entry => <Cell key={entry.name} fill={entry.color} />)}
+                    </Pie>
+                    <Tooltip formatter={(value: number) => [money(value), 'Spent']} />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
+              <h3>Monthly Income, Expenses & Savings</h3>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={analytics.monthly}>
+                    <XAxis dataKey="month" stroke="#9ca3af" />
+                    <YAxis stroke="#9ca3af" />
+                    <Tooltip formatter={(value: number) => [money(value), 'Amount']} />
+                    <Legend />
+                    <Area type="monotone" dataKey="income" stroke="#06b6d4" fill="rgba(6,182,212,0.15)" />
+                    <Area type="monotone" dataKey="expenses" stroke="#f59e0b" fill="rgba(245,158,11,0.15)" />
+                    <Area type="monotone" dataKey="savings" stroke="#10b981" fill="rgba(16,185,129,0.15)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
           </div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#ffffff', marginTop: '0.35rem' }}>
-            Essential: <span style={{ color: '#34d399' }}>{currency}{essentialSpent.toLocaleString()}</span>
-          </div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#ffffff' }}>
-            Non-Essential: <span style={{ color: '#fbbf24' }}>{currency}{nonEssentialSpent.toLocaleString()}</span>
-          </div>
-        </div>
 
-        <div className="glass-card" style={{ border: '1px solid rgba(139, 92, 246, 0.3)' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>
-            Hardware Contribution
+          <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
+            <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
+              <h3>Spending by Category</h3>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={analytics.categories}>
+                    <XAxis dataKey="name" stroke="#9ca3af" fontSize={11} angle={-15} textAnchor="end" />
+                    <YAxis stroke="#9ca3af" />
+                    <Tooltip formatter={(value: number) => [money(value), 'Spent']} />
+                    <Bar dataKey="amount" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
+              <h3>Transaction Origin</h3>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={sourceData}>
+                    <XAxis dataKey="name" stroke="#9ca3af" />
+                    <YAxis stroke="#9ca3af" />
+                    <Tooltip />
+                    <Bar dataKey="count" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
           </div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#a78bfa', marginTop: '0.25rem' }}>
-            {hardwareTransactions.length} Presses
-          </div>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: '0.35rem' }}>
-            Essential (Btn 1): {hardwareEssentialCount} | Non-Essential (Btn 2): {hardwareNonEssentialCount}
-          </div>
-        </div>
-      </div>
 
-      {/* Chart Row 1: Essential vs Non-Essential Pie Chart & Monthly Spending Trend */}
-      <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
-        {/* Pie Chart: Essential vs Non-Essential */}
-        <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
-          <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff', marginBottom: '1rem' }}>
-            Essential vs Non-Essential Spending Split
-          </h3>
-          <div style={{ flex: 1, width: '100%', minHeight: 0 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={classificationData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={100}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {classificationData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(val: any) => [`${currency}${Number(val).toLocaleString()}`, 'Spent']} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
+          <div className="glass-card">
+            <h3>Budget & ESP32 Summary</h3>
+            <p>Budget utilization: {analytics.budget.utilizationPercentage.toFixed(1)}% ({money(analytics.budget.totalSpent)} of {money(analytics.budget.totalAllocated)})</p>
+            <p>Hardware expenses: {money(analytics.hardware.totalExpenses)} across {analytics.hardware.transactionCount} transactions. Remaining budget: {money(analytics.budget.remaining)}.</p>
           </div>
-        </div>
-
-        {/* Monthly Trend Area Chart */}
-        <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
-          <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff', marginBottom: '1rem' }}>
-            Monthly Spending Trends
-          </h3>
-          <div style={{ flex: 1, width: '100%', minHeight: 0 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trendData}>
-                <XAxis dataKey="month" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} />
-                <Tooltip formatter={(val: any) => [`${currency}${Number(val).toLocaleString()}`, 'Amount']} />
-                <Legend />
-                <Area type="monotone" dataKey="essential" name="Essential" stroke="#10b981" fill="rgba(16, 185, 129, 0.2)" />
-                <Area type="monotone" dataKey="nonEssential" name="Non-Essential" stroke="#f59e0b" fill="rgba(245, 158, 11, 0.2)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
-      {/* Chart Row 2: Category Breakdown Bar Chart & Source Distribution */}
-      <div className="grid-2">
-        {/* Category Breakdown */}
-        <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
-          <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff', marginBottom: '1rem' }}>
-            Spending by Category
-          </h3>
-          <div style={{ flex: 1, width: '100%', minHeight: 0 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={categoryData}>
-                <XAxis dataKey="name" stroke="#9ca3af" fontSize={11} interval={0} angle={-15} textAnchor="end" />
-                <YAxis stroke="#9ca3af" fontSize={12} />
-                <Tooltip formatter={(val: any) => [`${currency}${Number(val).toLocaleString()}`, 'Spent']} />
-                <Bar dataKey="amount" fill="#6366f1" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Source Distribution (Hardware vs Web) */}
-        <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
-          <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff', marginBottom: '1rem' }}>
-            Transaction Origin Breakdown (Hardware vs Web)
-          </h3>
-          <div style={{ flex: 1, width: '100%', minHeight: 0 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={sourceComparisonData}>
-                <XAxis dataKey="name" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} />
-                <Tooltip formatter={(val: any) => [val, 'Transactions']} />
-                <Bar dataKey="count" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
+        </>
+      )}
+      {!loading && !error && analytics && analytics.summary.expenseCount === 0 && (
+        <div className="glass-card">No transactions exist in this date range. Choose another range or record a transaction.</div>
+      )}
     </div>
   );
 };
