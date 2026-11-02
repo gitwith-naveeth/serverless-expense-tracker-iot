@@ -25,7 +25,7 @@ This guide walks you through deploying the **Serverless Expense Tracker** to pro
 
 1. Fork or push this repository to GitHub.
 2. Sign in to [Vercel Dashboard](https://vercel.com) and click **Add New -> Project**.
-3. Import your GitHub repository. Keep the repository root as the Vercel project root so `/api/analytics/overview` is deployed.
+3. Import your GitHub repository. Use the repository root as the Vercel project root so `/api/analytics/overview` is deployed.
 4. Configure Build Settings:
    - **Framework Preset**: Vite
    - **Build Command**: `npm run build`
