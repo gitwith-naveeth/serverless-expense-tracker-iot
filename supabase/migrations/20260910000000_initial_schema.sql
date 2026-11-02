@@ -104,9 +104,12 @@ CREATE POLICY "Users can update own profile"
     USING (auth.uid() = id);
 
 -- Categories Policies
-CREATE POLICY "Users can view default or own categories" 
-    ON public.categories FOR SELECT 
-    USING (is_default = true OR auth.uid() = user_id);
+CREATE POLICY "Users can view default or own categories"
+    ON public.categories FOR SELECT
+    USING (
+        auth.uid() = user_id
+        OR (is_default = true AND user_id IS NULL)
+    );
 
 CREATE POLICY "Users can insert own categories" 
     ON public.categories FOR INSERT 

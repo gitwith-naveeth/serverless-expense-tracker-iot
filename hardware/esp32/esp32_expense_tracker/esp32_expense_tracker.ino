@@ -28,7 +28,7 @@ const char* WIFI_PASSWORD   = "YOUR_WIFI_PASSWORD";         // Wi-Fi Password
 const char* API_ENDPOINT    = "https://your-domain.vercel.app/api/hardware/expense"; // Serverless API URL
 const char* HEARTBEAT_URL   = "https://your-domain.vercel.app/api/hardware/heartbeat";
 const char* DEVICE_ID       = "ESP32-001";                 // Unique Device ID registered in Web Dashboard
-const char* DEVICE_TOKEN    = "esp32_secret_token_12345";  // Secret device token generated during pairing
+const char* DEVICE_TOKEN    = "YOUR_DEVICE_TOKEN";        // Replace with the token generated during pairing
 
 // ==================================================================================
 // 2. HARDWARE GPIO PIN DEFINITIONS

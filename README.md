@@ -98,7 +98,7 @@ Request Payload:
 ```json
 {
   "deviceId": "ESP32-001",
-  "deviceSecret": "esp32_secret_token_12345",
+  "deviceSecret": "YOUR_DEVICE_TOKEN",
   "expenseType": "essential",
   "amount": 100,
   "requestId": "req-987654321"

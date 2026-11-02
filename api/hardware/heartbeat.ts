@@ -1,4 +1,5 @@
 import { supabaseAdminClient, inMemoryStore } from '../_shared/supabaseAdmin';
+import { verifySecretHash } from '../_shared/cryptoUtils';
 
 export interface HeartbeatPayload {
   deviceId: string;
@@ -8,7 +9,7 @@ export interface HeartbeatPayload {
 }
 
 export async function handleHardwareHeartbeat(payload: HeartbeatPayload) {
-  const { deviceId, rssi, uptimeSeconds } = payload;
+  const { deviceId, deviceSecret, rssi, uptimeSeconds } = payload;
 
   if (!deviceId) {
     return {
@@ -17,7 +18,21 @@ export async function handleHardwareHeartbeat(payload: HeartbeatPayload) {
     };
   }
 
+  if (!deviceSecret) {
+    return { status: 401, body: { error: 'Device authentication is required.' } };
+  }
+
   if (supabaseAdminClient) {
+    const { data: knownDevice } = await supabaseAdminClient
+      .from('hardware_devices')
+      .select('device_secret_hash')
+      .eq('device_id', deviceId)
+      .single();
+
+    if (!knownDevice || !verifySecretHash(deviceSecret, knownDevice.device_secret_hash)) {
+      return { status: 401, body: { error: 'Device authentication failed.' } };
+    }
+
     const { data: device, error } = await supabaseAdminClient
       .from('hardware_devices')
       .update({
@@ -44,6 +59,9 @@ export async function handleHardwareHeartbeat(payload: HeartbeatPayload) {
   }
 
   const mockDev = inMemoryStore.devices.find(d => d.device_id === deviceId);
+  if (!mockDev || !verifySecretHash(deviceSecret, mockDev.device_secret_hash)) {
+    return { status: 401, body: { error: 'Device authentication failed.' } };
+  }
   if (mockDev) {
     mockDev.status = 'online';
     mockDev.last_seen = new Date().toISOString();

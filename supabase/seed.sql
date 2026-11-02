@@ -2,7 +2,7 @@
 -- Note: Replace UUIDs with actual auth user ID when seeding directly in Supabase Studio
 
 -- Sample default hardware device entry demo
--- Device Secret: 'esp32_secret_token_12345' -> SHA256 Hash: '900150983cd24fb0d6963f7d28e17f7243c224b7a1f5926ff9841804d9c72e27'
+-- Device Secret: replace 'YOUR_DEVICE_TOKEN' with a randomly generated per-device token before seeding.
 /*
 INSERT INTO public.hardware_devices (
     user_id,
