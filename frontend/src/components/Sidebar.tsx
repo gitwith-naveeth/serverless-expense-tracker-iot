@@ -35,7 +35,7 @@ export const Sidebar: React.FC = () => {
   ];
 
   return (
-    <aside style={{
+    <aside className="app-sidebar" style={{
       width: '260px',
       background: 'var(--bg-secondary)',
       borderRight: '1px solid var(--border-color)',
@@ -48,10 +48,10 @@ export const Sidebar: React.FC = () => {
       top: 0,
       height: '100vh'
     }}>
-      <div>
+      <div className="brand-copy">
         {/* Brand Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0 0.5rem 1.5rem 0.5rem' }}>
-          <div style={{
+          <div className="brand-mark" style={{
             width: '40px',
             height: '40px',
             borderRadius: '12px',
@@ -99,10 +99,10 @@ export const Sidebar: React.FC = () => {
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                   <Icon size={18} />
-                  <span>{item.label}</span>
+                  <span className="nav-label">{item.label}</span>
                 </div>
                 {item.badge && (
-                  <span className="badge badge-online" style={{ fontSize: '0.65rem' }}>
+                  <span className="badge badge-online nav-badge" style={{ fontSize: '0.65rem' }}>
                     {item.badge}
                   </span>
                 )}
@@ -120,7 +120,7 @@ export const Sidebar: React.FC = () => {
         flexDirection: 'column',
         gap: '0.75rem'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.25rem 0.5rem' }}>
+        <div className="user-block" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.25rem 0.5rem' }}>
           <div style={{
             width: '36px',
             height: '36px',
@@ -135,7 +135,7 @@ export const Sidebar: React.FC = () => {
           }}>
             {user?.full_name?.substring(0, 2).toUpperCase() || 'US'}
           </div>
-          <div style={{ overflow: 'hidden' }}>
+          <div className="user-copy" style={{ overflow: 'hidden' }}>
             <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {user?.full_name || 'Alex Mercer'}
             </div>
@@ -151,7 +151,7 @@ export const Sidebar: React.FC = () => {
           style={{ width: '100%', justifyContent: 'flex-start', gap: '0.6rem', fontSize: '0.85rem' }}
         >
           <LogOut size={16} />
-          <span>Sign Out</span>
+          <span className="logout-label">Sign Out</span>
         </button>
       </div>
     </aside>

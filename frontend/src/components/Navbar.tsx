@@ -13,7 +13,7 @@ export const Navbar: React.FC = () => {
   const currencySymbol = user?.currency === 'USD' ? '$' : user?.currency === 'EUR' ? '€' : '₹';
 
   return (
-    <header style={{
+    <header className="app-navbar" style={{
       height: '70px',
       borderBottom: '1px solid var(--border-color)',
       background: 'rgba(11, 15, 25, 0.8)',
