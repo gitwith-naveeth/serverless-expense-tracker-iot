@@ -4,6 +4,7 @@ import {
   AreaChart,
   Bar,
   BarChart,
+  CartesianGrid,
   Cell,
   Legend,
   Pie,
@@ -13,6 +14,8 @@ import {
   XAxis,
   YAxis
 } from 'recharts';
+import { AlertTriangle, ArrowUpRight, Database, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { supabase, isConfigured } from '../services/supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
@@ -105,109 +108,136 @@ export const Analytics: React.FC = () => {
   }, [startDate, endDate]);
 
   const money = (value: number) => `${currency}${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  const compactMoney = (value: number) => {
+    const amount = Number(value || 0);
+    if (Math.abs(amount) >= 1000000) return `${currency}${(amount / 1000000).toFixed(1)}m`;
+    if (Math.abs(amount) >= 1000) return `${currency}${(amount / 1000).toFixed(1)}k`;
+    return money(amount);
+  };
   const classificationData = analytics ? [
-    { name: 'Essential Expenses', value: analytics.summary.essentialExpenses, color: '#10b981' },
-    { name: 'Non-Essential Expenses', value: analytics.summary.nonEssentialExpenses, color: '#f59e0b' }
+    { name: 'Essential', value: analytics.summary.essentialExpenses, percentage: analytics.summary.essentialPercentage, color: '#8fb39d' },
+    { name: 'Non-essential', value: analytics.summary.nonEssentialExpenses, percentage: analytics.summary.nonEssentialPercentage, color: '#c79761' }
   ] : [];
   const sourceData = analytics ? Object.entries(analytics.sources).map(([name, value]) => ({
     name: name === 'hardware' ? 'ESP32 Hardware' : 'Web App',
     count: value.transactionCount
   })) : [];
+  const budgetOverage = analytics ? Math.max(analytics.budget.totalSpent - analytics.budget.totalAllocated, 0) : 0;
+  const budgetUtilization = analytics?.budget.utilizationPercentage ?? 0;
+  const isOverBudget = budgetOverage > 0 || budgetUtilization > 100;
+  const isNearBudget = !isOverBudget && budgetUtilization >= 85;
+  const dateRangeInvalid = startDate > endDate;
+  const categorySummary = analytics?.categories.slice(0, 5) ?? [];
 
   return (
-    <div>
+    <div className="analytics-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">Cloud Analytics & Financial Reports</h1>
           <p className="page-subtitle">Aggregated securely in Supabase for the selected date range.</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <label>From <input type="date" value={startDate} onChange={event => setStartDate(event.target.value)} /></label>
-          <label>To <input type="date" value={endDate} onChange={event => setEndDate(event.target.value)} /></label>
+        <div className="analytics-date-controls" aria-label="Analysis period">
+          <label htmlFor="analytics-start-date">From
+            <input id="analytics-start-date" type="date" value={startDate} max={endDate} onChange={event => setStartDate(event.target.value)} />
+          </label>
+          <label htmlFor="analytics-end-date">To
+            <input id="analytics-end-date" type="date" value={endDate} min={startDate} onChange={event => setEndDate(event.target.value)} />
+          </label>
         </div>
       </div>
 
-      {loading && <div className="glass-card">Loading cloud analytics...</div>}
-      {error && <div className="glass-card" style={{ color: '#fca5a5' }}>{error}</div>}
-      {!loading && !error && analytics && (
-        <>
-          <div className="grid-3" style={{ marginBottom: '1.5rem' }}>
-            <div className="glass-card"><div className="metric-label">Total Expenses</div><div className="metric-value">{money(analytics.summary.totalExpenses)}</div><div className="metric-caption">{analytics.summary.expenseCount} transactions</div></div>
-            <div className="glass-card"><div className="metric-label">Net Savings</div><div className="metric-value">{money(analytics.summary.netSavings)}</div><div className="metric-caption">Income {money(analytics.summary.totalIncome)}</div></div>
-            <div className="glass-card"><div className="metric-label">Income / Expense</div><div className="metric-value">{analytics.summary.incomeToExpenseRatio === null ? 'N/A' : `${analytics.summary.incomeToExpenseRatio.toFixed(2)} : 1`}</div><div className="metric-caption">Average daily spend {money(analytics.summary.averageDailySpending)}</div></div>
+      {loading && <div className="analytics-state" role="status"><RefreshCw size={18} /> Loading cloud analytics...</div>}
+      {error && <div className="analytics-state analytics-state-error" role="alert"><AlertTriangle size={18} /><span>{error}</span></div>}
+      {dateRangeInvalid && <div className="analytics-state analytics-state-error" role="alert"><AlertTriangle size={18} /> Choose a start date before the end date.</div>}
+      {!loading && !error && analytics && !dateRangeInvalid && (
+        analytics.summary.expenseCount === 0 ? (
+          <div className="analytics-empty glass-card">
+            <h2>No expenses in this date range</h2>
+            <p>Choose another range or record a transaction to see spending analysis. Income data is still reflected in your account.</p>
+            <Link to="/add-transaction" className="btn btn-secondary">Record a transaction <ArrowUpRight size={16} /></Link>
           </div>
-
-          <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
-            <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
-              <h3>Essential vs Non-Essential Spending</h3>
-              <div style={{ flex: 1, minHeight: 0 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={classificationData} dataKey="value" nameKey="name" innerRadius={60} outerRadius={100} paddingAngle={5}>
-                      {classificationData.map(entry => <Cell key={entry.name} fill={entry.color} />)}
-                    </Pie>
-                    <Tooltip formatter={(value: number) => [money(value), 'Spent']} />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
+        ) : (
+          <>
+            <div className="analytics-metric-grid">
+              <div className="analytics-metric"><span className="analytics-label">Total expenses</span><strong>{money(analytics.summary.totalExpenses)}</strong><span>{analytics.summary.expenseCount} transactions</span></div>
+              <div className="analytics-metric"><span className="analytics-label">Net savings</span><strong>{money(analytics.summary.netSavings)}</strong><span>Income {money(analytics.summary.totalIncome)}</span></div>
+              <div className="analytics-metric"><span className="analytics-label">Income / expense</span><strong>{analytics.summary.incomeToExpenseRatio === null ? 'N/A' : `${analytics.summary.incomeToExpenseRatio.toFixed(2)} : 1`}</strong><span>Average daily spend {money(analytics.summary.averageDailySpending)}</span></div>
+              <div className={`analytics-metric analytics-metric-status ${isOverBudget ? 'is-over' : isNearBudget ? 'is-near' : 'is-on-track'}`}>
+                <span className="analytics-label">Budget status</span><strong>{budgetUtilization.toFixed(1)}%</strong><span>{isOverBudget ? `Over by ${money(budgetOverage)}` : isNearBudget ? 'Approaching limit' : 'Within planned limit'}</span>
               </div>
             </div>
-            <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
-              <h3>Monthly Income, Expenses & Savings</h3>
-              <div style={{ flex: 1, minHeight: 0 }}>
+
+            <div className={`analytics-budget-alert ${isOverBudget ? 'is-over' : isNearBudget ? 'is-near' : 'is-on-track'}`} role={isOverBudget ? 'alert' : 'status'}>
+              <div className="analytics-budget-icon"><AlertTriangle size={19} /></div>
+              <div><strong>{isOverBudget ? 'Over budget' : isNearBudget ? 'Budget nearing its limit' : 'Budget on track'}</strong><p>{isOverBudget ? `Spending is ${money(budgetOverage)} above your ${money(analytics.budget.totalAllocated)} budget.` : `${money(analytics.budget.totalSpent)} of ${money(analytics.budget.totalAllocated)} allocated has been used.`}</p></div>
+              <Link to={isOverBudget ? '/transactions' : '/budgets'}>Review budget <ArrowUpRight size={15} /></Link>
+            </div>
+
+            <section className="analytics-section analytics-primary-section">
+              <div className="analytics-section-heading"><div><h2>Monthly cash flow</h2><p>Income, expenses, and savings · Amount in {currency}</p></div><span className="analytics-section-note">{analytics.monthly.length} months</span></div>
+              <div className="analytics-chart analytics-chart-primary" role="img" aria-label="Monthly income, expenses, and savings chart">
+                <p className="sr-only">Monthly cash flow chart. Latest month is {analytics.monthly[analytics.monthly.length - 1]?.month ?? 'not available'}.</p>
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={analytics.monthly}>
-                    <XAxis dataKey="month" stroke="#9ca3af" />
-                    <YAxis stroke="#9ca3af" />
+                    <CartesianGrid stroke="#2a333b" vertical={false} />
+                    <XAxis dataKey="month" stroke="#9ba5ad" tickLine={false} axisLine={false} />
+                    <YAxis stroke="#9ba5ad" tickLine={false} axisLine={false} tickFormatter={compactMoney} width={58} />
                     <Tooltip formatter={(value: number) => [money(value), 'Amount']} />
                     <Legend />
-                    <Area type="monotone" dataKey="income" stroke="#06b6d4" fill="rgba(6,182,212,0.15)" />
-                    <Area type="monotone" dataKey="expenses" stroke="#f59e0b" fill="rgba(245,158,11,0.15)" />
-                    <Area type="monotone" dataKey="savings" stroke="#10b981" fill="rgba(16,185,129,0.15)" />
+                    <Area type="monotone" dataKey="income" name="Income" stroke="#8fb39d" fill="#8fb39d" fillOpacity={0.08} strokeWidth={2} />
+                    <Area type="monotone" dataKey="expenses" name="Expenses" stroke="#c79761" fill="#c79761" fillOpacity={0.08} strokeWidth={2} />
+                    <Area type="monotone" dataKey="savings" name="Savings" stroke="#b8c2c9" fill="#b8c2c9" fillOpacity={0.05} strokeWidth={2} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
-            </div>
-          </div>
+              <div className="analytics-data-summary">{analytics.monthly.length > 0 ? `Latest month: ${analytics.monthly[analytics.monthly.length - 1].month} · Expenses ${money(analytics.monthly[analytics.monthly.length - 1].expenses)} · Savings ${money(analytics.monthly[analytics.monthly.length - 1].savings)}` : 'No monthly data available.'}</div>
+            </section>
 
-          <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
-            <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
-              <h3>Spending by Category</h3>
-              <div style={{ flex: 1, minHeight: 0 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={analytics.categories}>
-                    <XAxis dataKey="name" stroke="#9ca3af" fontSize={11} angle={-15} textAnchor="end" />
-                    <YAxis stroke="#9ca3af" />
-                    <Tooltip formatter={(value: number) => [money(value), 'Spent']} />
-                    <Bar dataKey="amount" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-            <div className="glass-card" style={{ height: '360px', display: 'flex', flexDirection: 'column' }}>
-              <h3>Transaction Origin</h3>
-              <div style={{ flex: 1, minHeight: 0 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={sourceData}>
-                    <XAxis dataKey="name" stroke="#9ca3af" />
-                    <YAxis stroke="#9ca3af" />
-                    <Tooltip />
-                    <Bar dataKey="count" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
+            <div className="analytics-grid">
+              <section className="analytics-section">
+                <div className="analytics-section-heading"><div><h2>Essential vs non-essential</h2><p>Spending mix · Amount in {currency}</p></div></div>
+                <div className="analytics-chart analytics-chart-secondary" role="img" aria-label="Essential and non-essential spending chart">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={classificationData} dataKey="value" nameKey="name" innerRadius={58} outerRadius={88} paddingAngle={3}>
+                        {classificationData.map(entry => <Cell key={entry.name} fill={entry.color} />)}
+                      </Pie>
+                      <Tooltip formatter={(value: number) => [money(value), 'Spent']} />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="analytics-breakdown">{classificationData.map(item => <div key={item.name}><span><i style={{ backgroundColor: item.color }} />{item.name}</span><strong>{item.percentage.toFixed(1)}% <small>{money(item.value)}</small></strong></div>)}</div>
+              </section>
 
-          <div className="glass-card">
-            <h3>Budget & ESP32 Summary</h3>
-            <p>Budget utilization: {analytics.budget.utilizationPercentage.toFixed(1)}% ({money(analytics.budget.totalSpent)} of {money(analytics.budget.totalAllocated)})</p>
-            <p>Hardware expenses: {money(analytics.hardware.totalExpenses)} across {analytics.hardware.transactionCount} transactions. Remaining budget: {money(analytics.budget.remaining)}.</p>
-          </div>
-        </>
-      )}
-      {!loading && !error && analytics && analytics.summary.expenseCount === 0 && (
-        <div className="glass-card">No transactions exist in this date range. Choose another range or record a transaction.</div>
+              <section className="analytics-section analytics-category-section">
+                <div className="analytics-section-heading"><div><h2>Spending by category</h2><p>Top categories · Amount in {currency}</p></div></div>
+                <div className="analytics-chart analytics-chart-secondary analytics-category-chart" role="img" aria-label="Spending by category chart">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={analytics.categories}>
+                      <CartesianGrid stroke="#2a333b" horizontal={false} />
+                      <XAxis dataKey="name" stroke="#9ba5ad" fontSize={11} tickLine={false} axisLine={false} />
+                      <YAxis stroke="#9ba5ad" tickLine={false} axisLine={false} tickFormatter={compactMoney} width={58} />
+                      <Tooltip formatter={(value: number) => [money(value), 'Spent']} />
+                      <Bar dataKey="amount" name="Spent" fill="#8fb39d" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="analytics-category-list">{categorySummary.map(category => <div key={category.name}><span>{category.name}</span><strong>{money(category.amount)} <small>{category.percentage.toFixed(1)}%</small></strong></div>)}</div>
+              </section>
+            </div>
+
+            <section className="analytics-section analytics-origin-section">
+              <div className="analytics-section-heading"><div><h2>Transaction origin</h2><p>Transaction count by capture method</p></div></div>
+              <div className="analytics-origin-grid">{sourceData.map(source => <div className="analytics-origin-item" key={source.name}><span>{source.name}</span><strong>{source.count}</strong><small>transactions</small></div>)}</div>
+            </section>
+
+            <section className="analytics-footer-summary">
+              <div><Database size={18} /><div><strong>Cloud and hardware activity</strong><p>{money(analytics.hardware.totalExpenses)} from ESP32 hardware across {analytics.hardware.transactionCount} transactions.</p></div></div>
+              <span>{isOverBudget ? `Remaining budget: ${money(analytics.budget.remaining)}` : `Allocated remaining: ${money(analytics.budget.remaining)}`}</span>
+            </section>
+          </>
+        )
       )}
     </div>
   );
