@@ -6,16 +6,17 @@ import { Cpu, Mail, User, ArrowRight, ShieldCheck } from 'lucide-react';
 export const Register: React.FC = () => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const { register, loading } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !name) return;
+    if (!email || !name || !password) return;
     setErrorMsg('');
 
-    const res = await register(name, email);
+    const res = await register(name, email, password);
     if (res.success) {
       navigate('/dashboard');
     } else {
@@ -100,6 +101,18 @@ export const Register: React.FC = () => {
                 style={{ paddingLeft: '2.75rem' }}
               />
             </div>
+          </div>
+
+          <div className="form-group">
+            <label>Password</label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Create a password"
+              className="form-control"
+            />
           </div>
 
           <button
