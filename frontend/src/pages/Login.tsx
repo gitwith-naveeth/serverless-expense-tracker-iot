@@ -1,20 +1,21 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Cpu, Mail, ArrowRight, ShieldCheck } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const { login, loading } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email) return;
+    if (!email || !password) return;
     setErrorMsg('');
 
-    const res = await login(email);
+    const res = await login(email, password);
     if (res.success) {
       navigate('/dashboard');
     } else {
@@ -86,6 +87,18 @@ export const Login: React.FC = () => {
             </div>
           </div>
 
+          <div className="form-group">
+            <label>Password</label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
+              className="form-control"
+            />
+          </div>
+
           <button
             type="submit"
             disabled={loading}
@@ -96,13 +109,6 @@ export const Login: React.FC = () => {
             <ArrowRight size={18} />
           </button>
         </form>
-
-        <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-          Don't have an account?{' '}
-          <Link to="/register" style={{ color: 'var(--primary)', fontWeight: 600, textDecoration: 'none' }}>
-            Register Account
-          </Link>
-        </div>
 
         <div style={{
           marginTop: '2rem',
