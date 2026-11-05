@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Transaction, HardwareDevice, HardwareActivityLog, Budget } from '../types';
-import { initialMockTransactions, mockDevices, mockBudget } from '../services/mockData';
+import { mockDevices, mockBudget } from '../services/mockData';
 import { supabase, isConfigured } from '../services/supabaseClient';
+import { useAuth } from './AuthContext';
 
 interface ToastNotification {
   id: string;
@@ -17,8 +18,8 @@ interface RealtimeContextType {
   budget: Budget;
   hardwareLogs: HardwareActivityLog[];
   toasts: ToastNotification[];
-  addTransaction: (tx: Omit<Transaction, 'id' | 'user_id' | 'timestamp'>) => void;
-  deleteTransaction: (id: string) => void;
+  addTransaction: (tx: Omit<Transaction, 'id' | 'user_id' | 'timestamp'>) => Promise<void>;
+  deleteTransaction: (id: string) => Promise<void>;
   triggerHardwareButtonPress: (deviceId: string, type: 'essential' | 'non-essential', customAmount?: number) => Promise<void>;
   updateDeviceSettings: (deviceId: string, essentialAmt: number, nonEssentialAmt: number) => void;
   registerDevice: (deviceId: string, name: string) => void;
@@ -29,7 +30,8 @@ interface RealtimeContextType {
 const RealtimeContext = createContext<RealtimeContextType | undefined>(undefined);
 
 export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [transactions, setTransactions] = useState<Transaction[]>(initialMockTransactions);
+  const { user } = useAuth();
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [devices, setDevices] = useState<HardwareDevice[]>(mockDevices);
   const [budget, setBudget] = useState<Budget>(mockBudget);
   const [hardwareLogs, setHardwareLogs] = useState<HardwareActivityLog[]>([
@@ -71,66 +73,126 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
-  // Realtime subscription setup if Supabase live is attached
+  // Load and subscribe to transactions for the logged-in user
   useEffect(() => {
-    if (isConfigured) {
-      const channel = supabase
-        .channel('public:transactions')
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'transactions' },
-          (payload) => {
-            const newTx = payload.new as Transaction;
-            setTransactions(prev => [newTx, ...prev]);
-
-            if (newTx.source === 'hardware') {
-              addToast(
-                newTx.expense_classification === 'essential' ? 'essential' : 'non-essential',
-                `Hardware Button Pressed!`,
-                `${newTx.expense_classification?.toUpperCase()} expense of ₹${newTx.amount} recorded from ${newTx.device_id || 'ESP32'}`
-              );
-
-              setHardwareLogs(prev => [
-                {
-                  id: 'log-' + Date.now(),
-                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-                  deviceId: newTx.device_id || 'ESP32-001',
-                  expenseType: (newTx.expense_classification as any) || 'essential',
-                  amount: newTx.amount,
-                  status: 'created',
-                },
-                ...prev
-              ]);
-            }
-          }
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
+    if (!isConfigured || !user?.id) {
+      setTransactions([]);
+      return;
     }
-  }, []);
 
-  const addTransaction = (txData: Omit<Transaction, 'id' | 'user_id' | 'timestamp'>) => {
-    const newTx: Transaction = {
-      ...txData,
-      id: 'tx-' + Date.now(),
-      user_id: 'usr-demo-001',
-      timestamp: new Date().toISOString(),
+    let active = true;
+
+    const loadTransactions = async () => {
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('timestamp', { ascending: false });
+
+      if (!active) return;
+
+      if (error) {
+        console.error('Failed to load transactions:', error.message);
+        addToast('info', 'Loading Failed', 'Could not load transactions from the database.');
+        return;
+      }
+
+      setTransactions(data || []);
     };
 
-    setTransactions(prev => [newTx, ...prev]);
+    const channel = supabase
+      .channel(`transactions-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'transactions',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (!active) return;
+
+          const newTx = payload.new as Transaction;
+
+          setTransactions((prev) =>
+            prev.some((tx) => tx.id === newTx.id)
+              ? prev
+              : [newTx, ...prev]
+          );
+        }
+      )
+      .subscribe();
+
+    loadTransactions();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  const addTransaction = async (
+    txData: Omit<Transaction, 'id' | 'user_id' | 'timestamp'>
+  ): Promise<void> => {
+    if (!user?.id) {
+      addToast('info', 'Not Logged In', 'Please log in before adding a transaction.');
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .insert({
+        user_id: user.id,
+        amount: txData.amount,
+        transaction_type: txData.transaction_type,
+        expense_classification: txData.expense_classification ?? null,
+        category: txData.category,
+        source: txData.source,
+        description: txData.description ?? null,
+        device_id: txData.device_id ?? null,
+        timestamp: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Failed to save transaction:', error.message);
+      addToast('info', 'Save Failed', error.message);
+      return;
+    }
+
+    setTransactions(prev =>
+      prev.some(tx => tx.id === data.id) ? prev : [data as Transaction, ...prev]
+    );
+
     addToast(
-      newTx.transaction_type === 'income' ? 'income' : (newTx.expense_classification || 'essential'),
+      data.transaction_type === 'income' ? 'income' : (data.expense_classification || 'essential'),
       'Transaction Recorded',
-      `Added ${newTx.category} for ₹${newTx.amount}`
+      `Added ${data.category} for ₹${data.amount}`
     );
   };
 
-  const deleteTransaction = (id: string) => {
+  const deleteTransaction = async (id: string): Promise<void> => {
+    if (!user?.id) {
+      addToast('info', 'Not Logged In', 'Please log in first.');
+      return;
+    }
+
+    const { error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', user.id);
+
+    if (error) {
+      console.error('Failed to delete transaction:', error.message);
+      addToast('info', 'Delete Failed', error.message);
+      return;
+    }
+
     setTransactions(prev => prev.filter(t => t.id !== id));
-    addToast('info', 'Transaction Removed', 'Selected transaction was deleted.');
+    addToast('info', 'Transaction Removed', 'Transaction deleted successfully.');
   };
 
   // Hardware Button Trigger Action (used by Live Hardware Simulator & Server API)

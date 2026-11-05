@@ -74,15 +74,36 @@ export async function handleAnalyticsOverview(request: AnalyticsRequest) {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'GET') {
-    res.status(405).json({ error: 'Method not allowed.' });
-    return;
-  }
+  try {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
 
-  const header = req.headers.authorization;
-  const authorization = Array.isArray(header) ? header[0] : header;
-  const startDate = Array.isArray(req.query.startDate) ? req.query.startDate[0] : req.query.startDate;
-  const endDate = Array.isArray(req.query.endDate) ? req.query.endDate[0] : req.query.endDate;
-  const result = await handleAnalyticsOverview({ authorization, startDate, endDate });
-  res.status(result.status).json(result.body);
+    const header = req.headers.authorization;
+    const authorization = Array.isArray(header) ? header[0] : header;
+
+    const startDate = Array.isArray(req.query.startDate)
+      ? req.query.startDate[0]
+      : req.query.startDate;
+
+    const endDate = Array.isArray(req.query.endDate)
+      ? req.query.endDate[0]
+      : req.query.endDate;
+
+    const result = await handleAnalyticsOverview({
+      authorization,
+      startDate,
+      endDate
+    });
+
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('[Analytics API Error]', error);
+
+    res.status(500).json({
+      error: 'Analytics API failed unexpectedly.',
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
