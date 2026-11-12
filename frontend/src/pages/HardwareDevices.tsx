@@ -2,26 +2,97 @@ import React, { useState } from 'react';
 import { useRealtime } from '../context/RealtimeContext';
 import { useAuth } from '../context/AuthContext';
 import { InteractiveHardwareSimulator } from '../components/InteractiveHardwareSimulator';
-import { Cpu, Plus, Wifi, Zap, Coffee, ShieldCheck, Key, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { supabase } from '../services/supabaseClient';
+import { Cpu, Plus, Zap, Coffee, Copy, Check, CheckCircle2, RefreshCw } from 'lucide-react';
 
 export const HardwareDevices: React.FC = () => {
-  const { devices, registerDevice } = useRealtime();
+  const { devices, devicesLoading, devicesError, refreshDevices } = useRealtime();
   const { user } = useAuth();
 
-  const [newDeviceId, setNewDeviceId] = useState('');
   const [newDeviceName, setNewDeviceName] = useState('');
   const [showRegModal, setShowRegModal] = useState(false);
   const [generatedSecret, setGeneratedSecret] = useState<string | null>(null);
+  const [registeredDevice, setRegisteredDevice] = useState<{ deviceName: string; deviceId: string } | null>(null);
+  const [registrationError, setRegistrationError] = useState<string | null>(null);
+  const [registrationLoading, setRegistrationLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const currency = user?.currency === 'USD' ? '$' : user?.currency === 'EUR' ? '€' : '₹';
 
-  const handleRegister = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newDeviceId.trim() || !newDeviceName.trim()) return;
+  const closePairingView = () => {
+    setShowRegModal(false);
+    setGeneratedSecret(null);
+    setRegisteredDevice(null);
+    setNewDeviceName('');
+    setRegistrationError(null);
+    setCopied(false);
+  };
 
-    registerDevice(newDeviceId, newDeviceName);
-    const secret = 'esp32_sec_' + Math.random().toString(36).substr(2, 16);
-    setGeneratedSecret(secret);
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newDeviceName.trim()) return;
+
+    setRegistrationLoading(true);
+    setRegistrationError(null);
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        setRegistrationError('Your session has expired. Please sign in again.');
+        return;
+      }
+
+      const response = await fetch('/api/hardware/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({ deviceName: newDeviceName.trim() })
+      });
+      const body = await response.json() as {
+        device?: { device_name: string; device_id: string };
+        deviceSecret?: string;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        setRegistrationError(
+          response.status === 401
+            ? 'Your session has expired. Please sign in again.'
+            : body.error || 'Unable to register this device.'
+        );
+        return;
+      }
+
+      if (!body.device || !body.deviceSecret) {
+        setRegistrationError('The registration response was incomplete. Please try again.');
+        return;
+      }
+
+      setRegisteredDevice({
+        deviceName: body.device.device_name,
+        deviceId: body.device.device_id
+      });
+      setGeneratedSecret(body.deviceSecret);
+      await refreshDevices();
+    } catch (error) {
+      setRegistrationError(error instanceof Error ? error.message : 'Unable to register this device.');
+    } finally {
+      setRegistrationLoading(false);
+    }
+  };
+
+  const copySecret = async () => {
+    if (!generatedSecret) return;
+    try {
+      await navigator.clipboard.writeText(generatedSecret);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+    } catch {
+      setRegistrationError('Unable to copy the secret. Please select and copy it manually.');
+    }
   };
 
   return (
@@ -48,37 +119,25 @@ export const HardwareDevices: React.FC = () => {
 
           {!generatedSecret ? (
             <form onSubmit={handleRegister}>
-              <div className="grid-2">
-                <div className="form-group">
-                  <label>Hardware Device ID (Unique identifier)</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. ESP32-003"
-                    value={newDeviceId}
-                    onChange={(e) => setNewDeviceId(e.target.value)}
-                    className="form-control"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Friendly Device Name</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Office Desk Button Box"
-                    value={newDeviceName}
-                    onChange={(e) => setNewDeviceName(e.target.value)}
-                    className="form-control"
-                  />
-                </div>
+              <div className="form-group">
+                <label>Friendly Device Name</label>
+                <input
+                  type="text"
+                  required
+                  maxLength={100}
+                  placeholder="e.g. Office Desk Button Box"
+                  value={newDeviceName}
+                  onChange={(e) => setNewDeviceName(e.target.value)}
+                  className="form-control"
+                />
               </div>
 
+              {registrationError && <p style={{ color: '#f87171', fontSize: '0.85rem' }}>{registrationError}</p>}
               <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-                <button type="submit" className="btn btn-primary">
-                  Generate Device Pair Key
+                <button type="submit" className="btn btn-primary" disabled={registrationLoading}>
+                  {registrationLoading ? 'Registering...' : 'Generate Device Pair Key'}
                 </button>
-                <button type="button" onClick={() => setShowRegModal(false)} className="btn btn-secondary">
+                <button type="button" onClick={closePairingView} className="btn btn-secondary">
                   Cancel
                 </button>
               </div>
@@ -86,10 +145,13 @@ export const HardwareDevices: React.FC = () => {
           ) : (
             <div style={{ padding: '1rem', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 'var(--radius-sm)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#34d399', fontWeight: 700 }}>
-                <CheckCircle2 size={18} /> Device Registered Successfully!
+                <CheckCircle2 size={18} /> Device Registered Successfully
               </div>
+              <p style={{ fontSize: '0.85rem', color: '#ffffff', marginTop: '0.75rem' }}>
+                {registeredDevice?.deviceName} ({registeredDevice?.deviceId})
+              </p>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                Copy the secret token below into your ESP32 C++ firmware code:
+                Copy and save this secret now. It cannot be retrieved later.
               </p>
               <div style={{
                 background: '#000000',
@@ -101,10 +163,14 @@ export const HardwareDevices: React.FC = () => {
                 marginTop: '0.5rem',
                 userSelect: 'all'
               }}>
-                const char* DEVICE_TOKEN = "{generatedSecret}";
+                {generatedSecret}
               </div>
+              <button type="button" onClick={copySecret} className="btn btn-secondary" style={{ marginTop: '0.75rem' }}>
+                {copied ? <Check size={16} /> : <Copy size={16} />}
+                {copied ? 'Copied' : 'Copy Secret'}
+              </button>
               <button
-                onClick={() => { setShowRegModal(false); setGeneratedSecret(null); setNewDeviceId(''); setNewDeviceName(''); }}
+                onClick={closePairingView}
                 className="btn btn-secondary"
                 style={{ marginTop: '1rem' }}
               >
@@ -121,9 +187,22 @@ export const HardwareDevices: React.FC = () => {
       </div>
 
       {/* Devices Grid */}
-      <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: '#ffffff', marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+      <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: '#ffffff' }}>
         Registered Physical Devices ({devices.length})
       </h3>
+      <button type="button" onClick={() => refreshDevices()} className="btn btn-secondary" disabled={devicesLoading}>
+        <RefreshCw size={16} /> Refresh
+      </button>
+      </div>
+
+      {devicesError && <p style={{ color: '#f87171', marginBottom: '1rem' }}>{devicesError}</p>}
+      {devicesLoading && <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>Loading registered devices...</p>}
+      {!devicesLoading && !devicesError && devices.length === 0 && (
+        <div className="glass-card" style={{ marginBottom: '1rem' }}>
+          <p style={{ color: 'var(--text-muted)' }}>No hardware devices are registered yet.</p>
+        </div>
+      )}
 
       <div className="grid-2">
         {devices.map(dev => (
@@ -175,7 +254,7 @@ export const HardwareDevices: React.FC = () => {
               <div>
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>Total Button Presses</span>
                 <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#34d399' }}>
-                  {dev.total_transactions || 24} Transactions
+                  {dev.total_transactions || 0} Transactions
                 </div>
               </div>
             </div>

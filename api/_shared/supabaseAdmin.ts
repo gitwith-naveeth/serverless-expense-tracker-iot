@@ -4,6 +4,7 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export const isLiveSupabase = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_URL);
+export const isProductionEnvironment = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
 
 let supabaseAdminClient: SupabaseClient | null = null;
 

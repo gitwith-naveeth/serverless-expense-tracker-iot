@@ -3,6 +3,7 @@ import cors from 'cors';
 import { handleHardwareExpense } from './hardware/expense';
 import { handleHardwareHeartbeat } from './hardware/heartbeat';
 import { handleHardwareStatus } from './hardware/status';
+import { handleHardwareRegistration } from './hardware/register';
 import { inMemoryStore } from './_shared/supabaseAdmin';
 import { handleAnalyticsOverview } from './analytics/overview';
 
@@ -50,7 +51,16 @@ app.post('/api/hardware/heartbeat', async (req, res) => {
 app.get('/api/hardware/status', async (req, res) => {
   try {
     const deviceId = req.query.deviceId as string | undefined;
-    const result = await handleHardwareStatus(deviceId);
+    const result = await handleHardwareStatus(deviceId, req.headers.authorization);
+    res.status(result.status).json(result.body);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal Server Error', details: err.message });
+  }
+});
+
+app.post('/api/hardware/register', async (req, res) => {
+  try {
+    const result = await handleHardwareRegistration(req.body, req.headers.authorization);
     res.status(result.status).json(result.body);
   } catch (err: any) {
     res.status(500).json({ error: 'Internal Server Error', details: err.message });
@@ -61,7 +71,16 @@ app.get('/api/hardware/status', async (req, res) => {
 app.get('/api/mock/transactions', (req, res) => {
   res.json({
     transactions: inMemoryStore.transactions,
-    devices: inMemoryStore.devices
+    devices: inMemoryStore.devices.map(({ id, user_id, device_id, device_name, status, default_essential_amount, default_non_essential_amount, last_seen }) => ({
+      id,
+      user_id,
+      device_id,
+      device_name,
+      status,
+      default_essential_amount,
+      default_non_essential_amount,
+      last_seen
+    }))
   });
 });
 
@@ -70,4 +89,5 @@ app.listen(PORT, () => {
   console.log(`   POST /api/hardware/expense`);
   console.log(`   POST /api/hardware/heartbeat`);
   console.log(`   GET  /api/hardware/status`);
+  console.log(`   POST /api/hardware/register`);
 });

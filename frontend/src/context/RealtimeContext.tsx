@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Transaction, HardwareDevice, HardwareActivityLog, Budget } from '../types';
-import { mockDevices, mockBudget } from '../services/mockData';
+import { mockBudget } from '../services/mockData';
 import { supabase, isConfigured } from '../services/supabaseClient';
 import { useAuth } from './AuthContext';
 
@@ -15,6 +15,8 @@ interface ToastNotification {
 interface RealtimeContextType {
   transactions: Transaction[];
   devices: HardwareDevice[];
+  devicesLoading: boolean;
+  devicesError: string | null;
   budget: Budget;
   hardwareLogs: HardwareActivityLog[];
   toasts: ToastNotification[];
@@ -22,7 +24,7 @@ interface RealtimeContextType {
   deleteTransaction: (id: string) => Promise<void>;
   triggerHardwareButtonPress: (deviceId: string, type: 'essential' | 'non-essential', customAmount?: number) => Promise<void>;
   updateDeviceSettings: (deviceId: string, essentialAmt: number, nonEssentialAmt: number) => void;
-  registerDevice: (deviceId: string, name: string) => void;
+  refreshDevices: () => Promise<{ success: boolean; error?: string }>;
   updateBudget: (total: number, essential: number, nonEssential: number) => void;
   removeToast: (id: string) => void;
 }
@@ -32,7 +34,9 @@ const RealtimeContext = createContext<RealtimeContextType | undefined>(undefined
 export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [devices, setDevices] = useState<HardwareDevice[]>(mockDevices);
+  const [devices, setDevices] = useState<HardwareDevice[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
   const [budget, setBudget] = useState<Budget>(mockBudget);
   const [hardwareLogs, setHardwareLogs] = useState<HardwareActivityLog[]>([
     {
@@ -72,6 +76,72 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const removeToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
+
+  const refreshDevices = async (): Promise<{ success: boolean; error?: string }> => {
+    setDevicesLoading(true);
+    setDevicesError(null);
+    if (!user?.id) {
+      setDevices([]);
+      setDevicesLoading(false);
+      return { success: false, error: 'Please sign in before loading hardware devices.' };
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) {
+      setDevices([]);
+      const error = 'Your session has expired. Please sign in again.';
+      setDevicesError(error);
+      setDevicesLoading(false);
+      return { success: false, error };
+    }
+
+    try {
+      const response = await fetch('/api/hardware/status', {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const body = await response.json() as { devices?: HardwareDevice[]; error?: string };
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          const error = 'Your session has expired. Please sign in again.';
+          setDevicesError(error);
+          setDevicesLoading(false);
+          return { success: false, error };
+        }
+        const error = body.error || 'Unable to load hardware devices.';
+        setDevicesError(error);
+        setDevicesLoading(false);
+        return { success: false, error };
+      }
+
+      setDevices(body.devices || []);
+      setDevicesLoading(false);
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load hardware devices.';
+      setDevicesError(message);
+      setDevicesLoading(false);
+      return {
+        success: false,
+        error: message
+      };
+    }
+  };
+
+  useEffect(() => {
+    if (!isConfigured || !user?.id) {
+      setDevices([]);
+      setDevicesError(null);
+      return;
+    }
+
+    refreshDevices().then(result => {
+      if (!result.success) {
+        addToast('info', 'Devices Unavailable', result.error || 'Unable to load hardware devices.');
+      }
+    });
+  }, [user?.id]);
 
   // Load and subscribe to transactions for the logged-in user
   useEffect(() => {
@@ -290,23 +360,6 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     addToast('info', 'Hardware Settings Saved', `Default amounts for ${deviceId} updated.`);
   };
 
-  const registerDevice = (deviceId: string, name: string) => {
-    const newDev: HardwareDevice = {
-      id: 'dev-' + Date.now(),
-      user_id: 'usr-demo-001',
-      device_id: deviceId.trim().toUpperCase(),
-      device_name: name.trim(),
-      status: 'online',
-      default_essential_amount: 100,
-      default_non_essential_amount: 200,
-      last_seen: new Date().toISOString(),
-      created_at: new Date().toISOString(),
-      total_transactions: 0,
-    };
-    setDevices(prev => [...prev, newDev]);
-    addToast('info', 'New Device Registered', `${newDev.device_name} (${newDev.device_id}) is ready.`);
-  };
-
   const updateBudget = (total: number, essential: number, nonEssential: number) => {
     setBudget(prev => ({
       ...prev,
@@ -321,6 +374,8 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     <RealtimeContext.Provider value={{
       transactions,
       devices,
+      devicesLoading,
+      devicesError,
       budget,
       hardwareLogs,
       toasts,
@@ -328,7 +383,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       deleteTransaction,
       triggerHardwareButtonPress,
       updateDeviceSettings,
-      registerDevice,
+      refreshDevices,
       updateBudget,
       removeToast,
     }}>

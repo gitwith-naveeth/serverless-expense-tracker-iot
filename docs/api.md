@@ -104,6 +104,59 @@ Query online status and stats for registered hardware devices.
 ### Request Query Parameters
 `GET /api/hardware/status?deviceId=ESP32-001`
 
+### Request Headers
+```http
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+```
+
+The response contains only devices owned by the authenticated user and never
+includes `device_secret_hash`.
+
+## 4. POST /api/hardware/register
+
+Registers a new hardware device for the authenticated Supabase user. The
+server generates both the unique device ID and device secret.
+
+### Request Headers
+```http
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+Content-Type: application/json
+```
+
+### Request Body
+```json
+{
+  "deviceName": "Office Desk Button Box"
+}
+```
+
+`deviceName` is optional and defaults to `ESP32 Push Button Box`.
+
+### Success Response
+```json
+{
+  "success": true,
+  "device": {
+    "id": "device-row-uuid",
+    "user_id": "user-uuid",
+    "device_id": "ESP32-ABC123",
+    "device_name": "Office Desk Button Box",
+    "status": "offline",
+    "default_essential_amount": 100,
+    "default_non_essential_amount": 200,
+    "last_seen": null,
+    "created_at": "2026-11-12T00:00:00.000Z",
+    "updated_at": "2026-11-12T00:00:00.000Z"
+  },
+  "deviceSecret": "plaintext-secret-shown-once",
+  "warning": "Save this device secret now. It will not be shown again."
+}
+```
+
+The plaintext `deviceSecret` is returned only by this registration response.
+Only its SHA-256 hash is stored in `hardware_devices`; the service-role key
+remains server-side.
+
 ### Success Response (HTTP 200 OK)
 ```json
 {

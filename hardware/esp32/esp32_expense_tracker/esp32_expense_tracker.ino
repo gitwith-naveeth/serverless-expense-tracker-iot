@@ -1,18 +1,7 @@
 /*
-  ==================================================================================
-  SERVERLESS EXPENSE TRACKER WITH HARDWARE INTEGRATION - ESP32 FIRMWARE
-  ==================================================================================
-  Author: Cloud & IoT Systems Engineer
-  Target Hardware: ESP32 Dev Module (NodeMCU ESP32 / ESP-WROOM-32)
-  Features:
-    - 2x Push Buttons (GPIO 18: Essential Expense, GPIO 19: Non-Essential Expense)
-    - Status LED Indicator (GPIO 2: Blink patterns for Wi-Fi, Success, Error)
-    - Wi-Fi auto-reconnect with exponential backoff
-    - HTTPS POST to Serverless API (/api/hardware/expense)
-    - SHA-256 / Bearer Token Device Authentication
-    - Request UUID Idempotency Guard (Prevents double button presses)
-    - Non-blocking software debouncing via millis()
-  ==================================================================================
+  ESP32 Expense Tracker
+  Single touch on GPIO 18: essential expense.
+  Double touch within 500 ms: non-essential expense.
 */
 
 #include <WiFi.h>
@@ -20,227 +9,269 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 
-// ==================================================================================
-// 1. DEVELOPER CONFIGURATION PARAMETERS (REPLACE VALUES BEFORE FLASHING)
-// ==================================================================================
-const char* WIFI_SSID       = "YOUR_WIFI_SSID";             // Wi-Fi Access Point Name
-const char* WIFI_PASSWORD   = "YOUR_WIFI_PASSWORD";         // Wi-Fi Password
-const char* API_ENDPOINT    = "https://your-domain.vercel.app/api/hardware/expense"; // Serverless API URL
-const char* HEARTBEAT_URL   = "https://your-domain.vercel.app/api/hardware/heartbeat";
-const char* DEVICE_ID       = "ESP32-001";                 // Unique Device ID registered in Web Dashboard
-const char* DEVICE_TOKEN    = "YOUR_DEVICE_TOKEN";        // Replace with the token generated during pairing
+// Configure these values before flashing. Do not commit real credentials.
+const char* WIFI_SSID = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* API_ENDPOINT = "https://your-domain.vercel.app/api/hardware/expense";
+const char* HEARTBEAT_URL = "https://your-domain.vercel.app/api/hardware/heartbeat";
+const char* DEVICE_ID = "YOUR_REGISTERED_DEVICE_ID";
+const char* DEVICE_SECRET = "YOUR_DEVICE_SECRET";
 
-// ==================================================================================
-// 2. HARDWARE GPIO PIN DEFINITIONS
-// ==================================================================================
-#define PIN_BUTTON_ESSENTIAL     18  // Push Button 1: Essential Expense (GPIO 18)
-#define PIN_BUTTON_NON_ESSENTIAL 19  // Push Button 2: Non-Essential Expense (GPIO 19)
-#define PIN_STATUS_LED           2   // Built-in Status LED Indicator (GPIO 2)
+// Paste the deployed backend's trusted root CA certificate here.
+// The firmware refuses to make HTTPS requests until this is configured.
+const char* ROOT_CA_CERTIFICATE = "";
 
-// Debounce & Lockout Configuration
-const unsigned long DEBOUNCE_DELAY_MS = 350; // 350ms lockout against button bouncing
-unsigned long lastEssentialPressTime   = 0;
-unsigned long lastNonEssentialPressTime= 0;
+const uint8_t TOUCH_PIN = 18;
+const uint8_t TOUCH_ACTIVE_LEVEL = HIGH;
+const uint8_t STATUS_LED_PIN = 2;
+const unsigned long TOUCH_DEBOUNCE_MS = 80;
+const unsigned long DOUBLE_TAP_WINDOW_MS = 500;
+const unsigned long HEARTBEAT_INTERVAL_MS = 60000;
+const uint8_t HTTP_RETRY_COUNT = 2;
 
-// Heartbeat Timer (pings server every 60 seconds)
-unsigned long lastHeartbeatTime        = 0;
-const unsigned long HEARTBEAT_INTERVAL = 60000;
+unsigned long lastTouchStart = 0;
+unsigned long firstTapTime = 0;
+unsigned long lastHeartbeatTime = 0;
+bool touchActive = false;
+bool tapPending = false;
+bool suppressRelease = false;
+bool requestInProgress = false;
 
-// Root CA Certificate for HTTPS Verification (Set to nullptr for test/dev mode)
-const char* rootCACertificate = nullptr;
-
-// ==================================================================================
-// 3. HELPER FUNCTIONS
-// ==================================================================================
-
-// Generates a pseudo-UUID string for request idempotency
-String generateRequestUUID() {
-  uint32_t r1 = esp_random();
-  uint32_t r2 = esp_random();
-  char uuidStr[37];
-  snprintf(uuidStr, sizeof(uuidStr), "%08x-%04x-4%03x-%04x-%08x%04x",
-           r1, (uint16_t)(r2 >> 16), (uint16_t)(r2 & 0x0FFF),
-           (uint16_t)((r2 >> 4) & 0x3FFF) | 0x8000, r1, (uint16_t)r2);
-  return String(uuidStr);
+String generateRequestId() {
+  uint32_t first = esp_random();
+  uint32_t second = esp_random();
+  char requestId[37];
+  snprintf(
+    requestId,
+    sizeof(requestId),
+    "%08lx-%04x-4%03x-%04x-%08lx%04x",
+    static_cast<unsigned long>(first),
+    static_cast<unsigned int>(second >> 16),
+    static_cast<unsigned int>(second & 0x0FFF),
+    static_cast<unsigned int>(((second >> 4) & 0x3FFF) | 0x8000),
+    static_cast<unsigned long>(first),
+    static_cast<unsigned int>(second)
+  );
+  return String(requestId);
 }
 
-// LED Blink Feedback Patterns
-void blinkLED(int count, int delayMs) {
-  for (int i = 0; i < count; i++) {
-    digitalWrite(PIN_STATUS_LED, HIGH);
+bool tlsConfigured() {
+  return ROOT_CA_CERTIFICATE != nullptr && strlen(ROOT_CA_CERTIFICATE) > 0;
+}
+
+bool prepareSecureClient(WiFiClientSecure& client) {
+  if (!tlsConfigured()) {
+    Serial.println("[TLS] Root CA certificate is not configured.");
+    return false;
+  }
+  client.setCACert(ROOT_CA_CERTIFICATE);
+  return true;
+}
+
+void blinkLED(uint8_t count, uint16_t delayMs) {
+  for (uint8_t index = 0; index < count; index++) {
+    digitalWrite(STATUS_LED_PIN, HIGH);
     delay(delayMs);
-    digitalWrite(PIN_STATUS_LED, LOW);
-    if (i < count - 1) delay(delayMs);
+    digitalWrite(STATUS_LED_PIN, LOW);
+    if (index + 1 < count) {
+      delay(delayMs);
+    }
   }
 }
 
-// Connect to Wi-Fi with retry backoff
 void connectToWiFi() {
-  if (WiFi.status() == WL_CONNECTED) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
 
-  Serial.print("Connecting to Wi-Fi SSID: ");
+  Serial.print("[Wi-Fi] Connecting to ");
   Serial.println(WIFI_SSID);
-
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    digitalWrite(PIN_STATUS_LED, !digitalRead(PIN_STATUS_LED)); // Rapid blink while connecting
-    delay(300);
-    Serial.print(".");
-    attempts++;
+  for (uint8_t attempt = 0; attempt < 20 && WiFi.status() != WL_CONNECTED; attempt++) {
+    digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
+    delay(500);
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n[Wi-Fi] Connected successfully!");
-    Serial.print("[Wi-Fi] IP Address: ");
+    digitalWrite(STATUS_LED_PIN, HIGH);
+    Serial.print("[Wi-Fi] Connected. IP: ");
     Serial.println(WiFi.localIP());
-    digitalWrite(PIN_STATUS_LED, HIGH); // Solid ON when connected
   } else {
-    Serial.println("\n[Wi-Fi] Connection failed! Retrying later...");
-    digitalWrite(PIN_STATUS_LED, LOW);
+    digitalWrite(STATUS_LED_PIN, LOW);
+    Serial.println("[Wi-Fi] Connection failed; will retry.");
   }
 }
 
-// Sends Hardware Expense Transaction Request to Serverless API
-bool sendExpenseTransaction(const char* expenseType) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[Error] Wi-Fi not connected. Attempting reconnection...");
-    connectToWiFi();
-    if (WiFi.status() != WL_CONNECTED) return false;
+bool sendExpenseTransaction(const char* expenseType, const String& requestId) {
+  if (requestInProgress) {
+    Serial.println("[Expense] Request already in progress; ignoring gesture.");
+    return false;
   }
 
-  Serial.println("\n=========================================");
-  Serial.printf("[Hardware Event] Button Pressed: %s\n", expenseType);
-  Serial.println("=========================================");
-
-  WiFiClientSecure client;
-  if (rootCACertificate != nullptr) {
-    client.setCACert(rootCACertificate);
-  } else {
-    client.setInsecure(); // Skip certificate validation for dev testing
-  }
-
-  HTTPClient http;
-  http.begin(client, API_ENDPOINT);
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("Authorization", String("Bearer ") + DEVICE_TOKEN);
-  http.setTimeout(10000); // 10s timeout
-
-  // Build JSON Payload using ArduinoJson
-  StaticJsonDocument<256> doc;
-  doc["deviceId"]     = DEVICE_ID;
-  doc["deviceSecret"] = DEVICE_TOKEN;
-  doc["expenseType"]  = expenseType;
-  doc["requestId"]    = generateRequestUUID();
-  doc["timestamp"]    = String(millis());
-
-  String jsonPayload;
-  serializeJson(doc, jsonPayload);
-
-  Serial.print("[HTTP POST] Sending Payload: ");
-  Serial.println(jsonPayload);
-
-  int httpResponseCode = http.POST(jsonPayload);
-
+  requestInProgress = true;
   bool success = false;
-  if (httpResponseCode > 0) {
-    String response = http.getString();
-    Serial.printf("[HTTP] Response Code: %d\n", httpResponseCode);
-    Serial.println("[HTTP] Server Response Body:");
-    Serial.println(response);
 
-    if (httpResponseCode == 200 || httpResponseCode == 201) {
-      Serial.println(">> SUCCESS: Transaction recorded in Cloud Database!");
-      blinkLED(2, 100); // Double short blink = Success
-      success = true;
-    } else {
-      Serial.println(">> SERVER ERROR: Verification or processing failed.");
-      blinkLED(4, 50); // 4 fast blinks = Error
-    }
-  } else {
-    Serial.printf(">> HTTP Connection Error: %s\n", http.errorToString(httpResponseCode).c_str());
-    blinkLED(5, 50);
+  if (WiFi.status() != WL_CONNECTED) {
+    connectToWiFi();
   }
 
-  http.end();
+  if (WiFi.status() != WL_CONNECTED || !tlsConfigured()) {
+    Serial.println("[Expense] Cannot send: Wi-Fi or TLS is not ready.");
+    requestInProgress = false;
+    return false;
+  }
+
+  for (uint8_t attempt = 1; attempt <= HTTP_RETRY_COUNT && !success; attempt++) {
+    WiFiClientSecure client;
+    if (!prepareSecureClient(client)) {
+      break;
+    }
+
+    HTTPClient http;
+    if (!http.begin(client, API_ENDPOINT)) {
+      Serial.println("[Expense] Failed to initialize HTTPS request.");
+      break;
+    }
+
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", String("Bearer ") + DEVICE_SECRET);
+    http.setTimeout(10000);
+
+    StaticJsonDocument<256> payload;
+    payload["deviceId"] = DEVICE_ID;
+    payload["deviceSecret"] = DEVICE_SECRET;
+    payload["expenseType"] = expenseType;
+    payload["requestId"] = requestId;
+
+    String body;
+    serializeJson(payload, body);
+    int responseCode = http.POST(body);
+
+    if (responseCode == 200 || responseCode == 201) {
+      Serial.printf("[Expense] %s expense succeeded (HTTP %d).\n", expenseType, responseCode);
+      blinkLED(2, 100);
+      success = true;
+    } else if (responseCode > 0) {
+      Serial.printf("[Expense] %s expense failed (HTTP %d, attempt %u).\n", expenseType, responseCode, attempt);
+      blinkLED(4, 50);
+    } else {
+      Serial.printf("[Expense] HTTPS failure on attempt %u: %s\n", attempt, http.errorToString(responseCode).c_str());
+      blinkLED(5, 50);
+    }
+
+    http.end();
+    if (!success && attempt < HTTP_RETRY_COUNT) {
+      delay(500);
+    }
+  }
+
+  requestInProgress = false;
   return success;
 }
 
-// Sends Heartbeat Ping to mark device online
 void sendHeartbeat() {
-  if (WiFi.status() != WL_CONNECTED) return;
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+  if (!tlsConfigured()) {
+    Serial.println("[Heartbeat] Skipped: TLS certificate is not configured.");
+    return;
+  }
 
   WiFiClientSecure client;
-  client.setInsecure();
+  if (!prepareSecureClient(client)) {
+    return;
+  }
+
   HTTPClient http;
+  if (!http.begin(client, HEARTBEAT_URL)) {
+    Serial.println("[Heartbeat] Failed to initialize HTTPS request.");
+    return;
+  }
 
-  http.begin(client, HEARTBEAT_URL);
   http.addHeader("Content-Type", "application/json");
+  http.setTimeout(10000);
 
-  StaticJsonDocument<128> doc;
-  doc["deviceId"] = DEVICE_ID;
-  doc["rssi"]     = WiFi.RSSI();
-  doc["uptime"]   = millis() / 1000;
+  StaticJsonDocument<192> payload;
+  payload["deviceId"] = DEVICE_ID;
+  payload["deviceSecret"] = DEVICE_SECRET;
+  payload["rssi"] = WiFi.RSSI();
+  payload["uptimeSeconds"] = millis() / 1000;
 
   String body;
-  serializeJson(doc, body);
+  serializeJson(payload, body);
+  int responseCode = http.POST(body);
 
-  http.POST(body);
+  if (responseCode == 200) {
+    Serial.println("[Heartbeat] Succeeded.");
+  } else if (responseCode > 0) {
+    Serial.printf("[Heartbeat] Failed (HTTP %d).\n", responseCode);
+  } else {
+    Serial.printf("[Heartbeat] HTTPS failure: %s\n", http.errorToString(responseCode).c_str());
+  }
+
   http.end();
 }
 
-// ==================================================================================
-// 4. ARDUINO SETUP & MAIN LOOP
-// ==================================================================================
+void handleTouchGesture() {
+  unsigned long now = millis();
+  bool touched = digitalRead(TOUCH_PIN) == TOUCH_ACTIVE_LEVEL;
+
+  if (touched && !touchActive && now - lastTouchStart >= TOUCH_DEBOUNCE_MS) {
+    touchActive = true;
+    lastTouchStart = now;
+
+    if (tapPending && now - firstTapTime <= DOUBLE_TAP_WINDOW_MS) {
+      tapPending = false;
+      suppressRelease = true;
+      Serial.println("[Touch] Double tap recognized: non-essential expense.");
+      sendExpenseTransaction("non-essential", generateRequestId());
+    }
+  } else if (!touched && touchActive) {
+    touchActive = false;
+    if (suppressRelease) {
+      suppressRelease = false;
+    } else if (!tapPending) {
+      tapPending = true;
+      firstTapTime = now;
+    }
+  }
+
+  if (tapPending && now - firstTapTime > DOUBLE_TAP_WINDOW_MS) {
+    tapPending = false;
+    Serial.println("[Touch] Single tap recognized: essential expense.");
+    sendExpenseTransaction("essential", generateRequestId());
+  }
+}
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  digitalWrite(STATUS_LED_PIN, LOW);
 
-  Serial.println("\n---------------------------------------------------------");
-  Serial.println(" Serverless Expense Tracker ESP32 Firmware Starting...");
-  Serial.println("---------------------------------------------------------");
-
-  // Configure GPIO Pins
-  pinMode(PIN_BUTTON_ESSENTIAL, INPUT_PULLUP);
-  pinMode(PIN_BUTTON_NON_ESSENTIAL, INPUT_PULLUP);
-  pinMode(PIN_STATUS_LED, OUTPUT);
-
-  digitalWrite(PIN_STATUS_LED, LOW);
-
-  // Initial Wi-Fi Connection
+  Serial.println("\n[Device] Initializing ESP32 Expense Tracker.");
+  Serial.println("[Device] HW-763 digital input: GPIO 18.");
+  pinMode(TOUCH_PIN, INPUT);
+  Serial.print("[Touch] Startup reading: ");
+  Serial.println(digitalRead(TOUCH_PIN));
   connectToWiFi();
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
+  unsigned long now = millis();
+  handleTouchGesture();
 
-  // Check Button 1 — Essential Expense (Active LOW)
-  if (digitalRead(PIN_BUTTON_ESSENTIAL) == LOW) {
-    if (currentMillis - lastEssentialPressTime > DEBOUNCE_DELAY_MS) {
-      lastEssentialPressTime = currentMillis;
-      sendExpenseTransaction("essential");
-    }
-  }
-
-  // Check Button 2 — Non-Essential Expense (Active LOW)
-  if (digitalRead(PIN_BUTTON_NON_ESSENTIAL) == LOW) {
-    if (currentMillis - lastNonEssentialPressTime > DEBOUNCE_DELAY_MS) {
-      lastNonEssentialPressTime = currentMillis;
-      sendExpenseTransaction("non-essential");
-    }
-  }
-
-  // Heartbeat Timer
-  if (currentMillis - lastHeartbeatTime > HEARTBEAT_INTERVAL) {
-    lastHeartbeatTime = currentMillis;
+  if (now - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS) {
+    lastHeartbeatTime = now;
     sendHeartbeat();
   }
 
-  // Maintain Wi-Fi Connection
-  if (WiFi.status() != WL_CONNECTED && currentMillis % 15000 == 0) {
+  if (WiFi.status() != WL_CONNECTED && now % 15000 < 50) {
     connectToWiFi();
   }
+
+  delay(10);
 }

@@ -1,4 +1,4 @@
-import { supabaseAdminClient, inMemoryStore } from '../_shared/supabaseAdmin';
+import { isProductionEnvironment, supabaseAdminClient, inMemoryStore } from '../_shared/supabaseAdmin';
 import { verifySecretHash } from '../_shared/cryptoUtils';
 
 export interface HeartbeatPayload {
@@ -6,6 +6,17 @@ export interface HeartbeatPayload {
   deviceSecret?: string;
   rssi?: number;
   uptimeSeconds?: number;
+}
+
+interface VercelRequest {
+  method?: string;
+  headers: Record<string, string | string[] | undefined>;
+  body?: HeartbeatPayload;
+}
+
+interface VercelResponse {
+  status(code: number): VercelResponse;
+  json(body: unknown): void;
 }
 
 export async function handleHardwareHeartbeat(payload: HeartbeatPayload) {
@@ -20,6 +31,10 @@ export async function handleHardwareHeartbeat(payload: HeartbeatPayload) {
 
   if (!deviceSecret) {
     return { status: 401, body: { error: 'Device authentication is required.' } };
+  }
+
+  if (!supabaseAdminClient && isProductionEnvironment) {
+    return { status: 503, body: { error: 'Hardware heartbeat is not configured.' } };
   }
 
   if (supabaseAdminClient) {
@@ -78,4 +93,19 @@ export async function handleHardwareHeartbeat(payload: HeartbeatPayload) {
       serverTimestamp: new Date().toISOString()
     }
   };
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  try {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const result = await handleHardwareHeartbeat(req.body || {} as HeartbeatPayload);
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('[Hardware Heartbeat API Error]', error);
+    res.status(500).json({ error: 'Hardware heartbeat failed unexpectedly.' });
+  }
 }
